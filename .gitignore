@@ -1,4 +1,16 @@
-.env
+# Generated files
+chunks_output.json
+
+# Sample documents
+data/*.pdf
+
+# Vector databases
+faiss_index/
+
+# Python
 venv/
 __pycache__/
-faiss_index/
+*.pyc
+
+# Environment variables
+.env
