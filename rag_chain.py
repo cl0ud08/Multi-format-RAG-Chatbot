@@ -5,20 +5,20 @@ from vector_store import load_vector_store
 load_dotenv()
 
 
-def build_rag_chain(k: int = 4):
+def build_rag_chain():
     """
     Load FAISS vector store and Gemini model.
     """
 
-    # Load FAISS index
+    # Load saved FAISS index
     db = load_vector_store()
 
     # Create retriever
     retriever = db.as_retriever(
-    search_kwargs={"k": k}
-)
+        search_kwargs={"k": 4}
+    )
 
-    # Gemini LLM
+    # Gemini model
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
         temperature=0
@@ -27,26 +27,39 @@ def build_rag_chain(k: int = 4):
     return retriever, llm
 
 
-def ask(retriever, llm, question: str):
+def log_retrieved_chunks(retriever, question):
     """
-    Retrieve relevant chunks and ask Gemini.
+    Display chunks returned by FAISS.
+    Useful for debugging retrieval quality.
+    """
+
+    docs = retriever.invoke(question)
+
+    print("\nRetrieved Context:")
+    print("=" * 60)
+
+    for i, doc in enumerate(docs, start=1):
+        print(f"\nChunk {i}")
+        print(f"Page: {doc.metadata.get('page', 'N/A')}")
+        print(doc.page_content[:500])
+        print("-" * 60)
+
+    return docs
+
+
+def ask(retriever, llm, question):
+    """
+    Ask a question using RAG.
     """
 
     print(f"\nQuestion: {question}")
     print("-" * 60)
 
-    # Retrieve relevant documents
-    docs = retriever.invoke(question)
-
-    # Debug: Show retrieved chunks
-    print("\nRetrieved Context:")
-    print("=" * 60)
-
-    for i, doc in enumerate(docs):
-        print(f"\nChunk {i+1}")
-        print(f"Page: {doc.metadata.get('page', 'N/A')}")
-        print(doc.page_content[:500])
-        print("-" * 60)
+    # Retrieve relevant chunks
+    docs = log_retrieved_chunks(
+        retriever,
+        question
+    )
 
     # Build context
     context = "\n\n".join(
@@ -57,9 +70,9 @@ def ask(retriever, llm, question: str):
     prompt = f"""
 You are a helpful assistant.
 
-Use ONLY the context below to answer the question.
+Answer ONLY using the provided context.
 
-If the answer is not present in the context, respond exactly:
+If the answer is not present in the context, reply exactly:
 
 I don't have enough information in the document to answer this.
 
@@ -72,7 +85,7 @@ Question:
 Answer:
 """
 
-    # Generate answer
+    # Gemini response
     response = llm.invoke(prompt)
 
     print("\nAnswer:")
@@ -91,14 +104,20 @@ if __name__ == "__main__":
 
     retriever, llm = build_rag_chain()
 
-    questions = [
-    "What is an embedding?",
-    "Why do we use chunking?",
-    "What are the three steps of RAG?",
-    "What metadata does each chunk contain?",
-    "Why persist the FAISS index?"
-]
+    while True:
 
-    for q in questions:
-        ask(retriever, llm, q)
+        question = input(
+            "\nAsk a question (type 'exit' to quit): "
+        )
+
+        if question.lower() == "exit":
+            print("Goodbye!")
+            break
+
+        ask(
+            retriever,
+            llm,
+            question
+        )
+
         print("\n" + "=" * 80)
