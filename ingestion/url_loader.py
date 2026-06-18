@@ -1,5 +1,6 @@
 from langchain_community.document_loaders import WebBaseLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from ingestion.splitters import get_splitter
+from ingestion.metadata import enrich_metadata, filter_short_chunks, deduplicate_chunks
 import requests
 
 HEADERS = {
@@ -9,17 +10,13 @@ HEADERS = {
 
 def is_valid_url(url: str) -> bool:
     try:
-        # GET instead of HEAD — many sites (including Wikipedia) block HEAD requests
-        # stream=True avoids downloading the full page just to check reachability
         response = requests.get(url, headers=HEADERS, timeout=5, stream=True)
         return response.status_code < 400
     except Exception:
         return False
 
 
-def load_and_chunk_url(url: str, chunk_size: int = 500, chunk_overlap: int = 50):
-    """Load a webpage and split into chunks."""
-
+def load_and_chunk_url(url: str) -> list:
     print(f"Loading URL: {url}")
 
     if not is_valid_url(url):
@@ -30,18 +27,18 @@ def load_and_chunk_url(url: str, chunk_size: int = 500, chunk_overlap: int = 50)
 
     for doc in docs:
         doc.page_content = " ".join(doc.page_content.split())
-        doc.metadata["source"] = url
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap
-    )
+    splitter = get_splitter("url")
     chunks = splitter.split_documents(docs)
-    print(f"✅ URL loaded: {len(chunks)} chunks")
+
+    chunks = filter_short_chunks(chunks)
+    chunks = deduplicate_chunks(chunks)
+    chunks = enrich_metadata(chunks, source_type="url", extra={"url": url})
+
+    print(f"✅ URL: {len(chunks)} final chunks")
     return chunks
 
 
 if __name__ == "__main__":
     chunks = load_and_chunk_url("https://en.wikipedia.org/wiki/Retrieval-augmented_generation")
-    for i, c in enumerate(chunks[:3]):
-        print(f"\nChunk {i+1}: {c.page_content[:200]}...")
+    print(f"\nTotal chunks: {len(chunks)}")

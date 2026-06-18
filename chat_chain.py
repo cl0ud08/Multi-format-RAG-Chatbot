@@ -7,7 +7,7 @@ from langchain_core.prompts import (
     ChatPromptTemplate
 )
 from langchain_google_genai import ChatGoogleGenerativeAI
-from vector_store import load_vector_store
+from ingestion.index_manager import load_index
 from dotenv import load_dotenv
 import os
 import time
@@ -25,7 +25,7 @@ def build_chat_chain(k: int = 4, memory_window: int = 3):
     """Build a conversational RAG chain with memory."""
 
     # Load retriever
-    db = load_vector_store()
+    db = load_index()
     retriever = db.as_retriever(search_kwargs={"k": k})
 
     # Gemini LLM
@@ -44,11 +44,11 @@ def build_chat_chain(k: int = 4, memory_window: int = 3):
     )
 
     # System prompt — controls personality + grounding behavior
-    system_template = """You are a helpful assistant that answers questions strictly
-based on the provided document context. Follow these rules:
-1. Only use information from the context below.
-2. If the answer isn't in the context, say "I don't have that information in the document."
-3. When referencing prior conversation, be concise.
+    system_template = """You are a helpful assistant with access to one or more documents.
+Answer using ONLY the context provided. When answering:
+1. Cite which document the information comes from using its filename or URL if relevant.
+2. If multiple documents are relevant, combine their information clearly.
+3. If the answer is not in any document, say "I don't have that information in the document."
 4. Never make up facts.
 
 Context:

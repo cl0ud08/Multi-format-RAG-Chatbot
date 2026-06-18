@@ -2,9 +2,13 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from chat_chain import build_chat_chain
-from vector_store import embeddings, FAISS_PATH
 from ingestion.loader_router import load_and_chunk
-from langchain_community.vectorstores import FAISS
+from ingestion.index_manager import (
+    add_document_to_index,
+    clear_index,
+    list_documents,
+    load_registry
+)
 from dotenv import load_dotenv
 import os
 import shutil
@@ -12,7 +16,7 @@ import uuid
 
 load_dotenv()
 
-app = FastAPI(title="RAG Chatbot API", version="1.1")
+app = FastAPI(title="RAG Chatbot API", version="2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,42 +39,42 @@ class ChatResponse(BaseModel):
     answer: str
     sources: list[dict]
 
-class UploadResponse(BaseModel):
-    message: str
-    filename: str
-    chunks: int
-
 class URLRequest(BaseModel):
     url: str
 
 
-# --- Helper: embed chunks and save FAISS index (used by all upload routes) ---
+# --- Helper ---
 
-def embed_and_save(chunks) -> int:
-    """Embed chunks with HuggingFace, save FAISS index, return chunk count."""
-    db = FAISS.from_documents(chunks, embeddings)
-    db.save_local(FAISS_PATH)
-    return len(chunks)
+def refresh_chain():
+    """Rebuild chat chain from latest merged index."""
+    global chat_chain
+    chat_chain = build_chat_chain()
 
 
 # --- Routes ---
 
 @app.get("/")
 def root():
-    return {"status": "RAG Chatbot API is running"}
+    return {"status": "RAG Chatbot API v2 running"}
 
 
-@app.post("/upload", response_model=UploadResponse)
+@app.get("/documents")
+def get_documents():
+    """List all ingested documents."""
+    return {
+        "documents": list_documents(),
+        "registry": load_registry()
+    }
+
+
+@app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Upload a PDF, DOCX, or CSV file."""
+    """Upload a PDF, DOCX, or CSV file — merges into existing index."""
     global chat_chain
 
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in {".pdf", ".docx", ".csv"}:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type: {ext}. Use PDF, DOCX, or CSV."
-        )
+        raise HTTPException(400, f"Unsupported type: {ext}")
 
     file_id = str(uuid.uuid4())[:8]
     save_path = os.path.join(UPLOAD_DIR, f"{file_id}_{file.filename}")
@@ -80,63 +84,64 @@ async def upload_file(file: UploadFile = File(...)):
 
     try:
         chunks = load_and_chunk(save_path)
-        chunk_count = embed_and_save(chunks)
+        registry = add_document_to_index(chunks, file.filename, ext[1:])
+        refresh_chain()
 
-        chat_chain = build_chat_chain()
-
-        return UploadResponse(
-            message=f"{ext[1:].upper()} processed successfully.",
-            filename=file.filename,
-            chunks=chunk_count
-        )
+        return {
+            "message": f"{ext[1:].upper()} ingested successfully.",
+            "filename": file.filename,
+            "chunks_added": len(chunks),
+            "total_docs": len(registry["documents"]),
+            "total_chunks": registry["total_chunks"]
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(500, str(e))
 
 
 @app.post("/upload/url")
 async def upload_url(request: URLRequest):
-    """Ingest a webpage by URL."""
+    """Ingest a webpage by URL — merges into existing index."""
     global chat_chain
 
     try:
         chunks = load_and_chunk(request.url)
-        chunk_count = embed_and_save(chunks)
-
-        chat_chain = build_chat_chain()
+        registry = add_document_to_index(chunks, request.url, "url")
+        refresh_chain()
 
         return {
             "message": "URL ingested successfully.",
             "url": request.url,
-            "chunks": chunk_count
+            "chunks_added": len(chunks),
+            "total_docs": len(registry["documents"]),
+            "total_chunks": registry["total_chunks"]
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(500, str(e))
 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
-    """Answer a question using the current vector store + Gemini."""
+    """Ask a question across all ingested documents."""
     global chat_chain
 
     if not request.question.strip():
-        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+        raise HTTPException(400, "Question cannot be empty.")
 
     if chat_chain is None:
         try:
-            chat_chain = build_chat_chain()
+            refresh_chain()
         except FileNotFoundError:
-            raise HTTPException(
-                status_code=400,
-                detail="No document uploaded yet. Please upload a file or URL first."
-            )
+            raise HTTPException(400, "No documents uploaded yet.")
 
     try:
         result = chat_chain.invoke({"question": request.question})
 
         sources = [
             {
+                "filename": doc.metadata.get("filename", doc.metadata.get("url", "N/A")),
+                "source_type": doc.metadata.get("source_type", "unknown"),
                 "page": doc.metadata.get("page", "N/A"),
-                "source": doc.metadata.get("source", "N/A"),
+                "chunk_index": doc.metadata.get("chunk_index", "N/A"),
                 "content": doc.page_content[:200]
             }
             for doc in result.get("source_documents", [])
@@ -147,24 +152,29 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         err_str = str(e)
         if "RESOURCE_EXHAUSTED" in err_str or "429" in err_str:
-            raise HTTPException(
-                status_code=429,
-                detail="Gemini API quota exhausted (daily or per-minute limit). Try again later."
-            )
-        raise HTTPException(status_code=500, detail=err_str)
+            raise HTTPException(429, "Gemini API quota exhausted. Try again later.")
+        raise HTTPException(500, err_str)
 
 
 @app.delete("/reset")
 def reset():
-    """Clear memory and reset the chain."""
+    """Clear everything — index, uploads, chain."""
     global chat_chain
+    clear_index()
     chat_chain = None
-    return {"message": "Session reset successfully."}
+
+    for f in os.listdir(UPLOAD_DIR):
+        os.remove(os.path.join(UPLOAD_DIR, f))
+
+    return {"message": "All documents and index cleared."}
 
 
 @app.get("/health")
 def health():
+    docs = list_documents()
     return {
         "status": "ok",
-        "chain_loaded": chat_chain is not None
+        "chain_loaded": chat_chain is not None,
+        "docs_count": len(docs),
+        "documents": [d["name"] for d in docs]
     }

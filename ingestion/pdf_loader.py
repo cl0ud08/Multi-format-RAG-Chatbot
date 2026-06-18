@@ -1,60 +1,29 @@
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-import json
+from ingestion.splitters import get_splitter
+from ingestion.metadata import enrich_metadata, filter_short_chunks, deduplicate_chunks
 import os
 
-def load_and_chunk_pdf(pdf_path: str, chunk_size: int = 500, chunk_overlap: int = 50):
-    """Load a PDF and split it into chunks."""
 
-    # Step 1: Load the PDF
+def load_and_chunk_pdf(pdf_path: str) -> list:
     print(f"Loading PDF: {pdf_path}")
     loader = PyPDFLoader(pdf_path)
     pages = loader.load()
-    print(f"✅ Loaded {len(pages)} pages")
+    print(f"  Pages loaded: {len(pages)}")
 
-    # Step 2: Split into chunks
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", ".", " ", ""]  # tries these in order
-    )
+    splitter = get_splitter("pdf")
     chunks = splitter.split_documents(pages)
-    print(f"✅ Split into {len(chunks)} chunks")
 
+    chunks = filter_short_chunks(chunks)
+    chunks = deduplicate_chunks(chunks)
+    chunks = enrich_metadata(chunks, source_type="pdf", extra={
+        "filename": os.path.basename(pdf_path),
+        "filepath": pdf_path
+    })
+
+    print(f"✅ PDF: {len(chunks)} final chunks")
     return chunks
 
 
-def preview_chunks(chunks, n=5):
-    """Print the first n chunks."""
-    print(f"\n--- First {n} chunks ---")
-    for i, chunk in enumerate(chunks[:n]):
-        print(f"\nChunk {i+1}:")
-        print(f"  Content : {chunk.page_content[:200]}...")
-        print(f"  Metadata: {chunk.metadata}")
-
-
-def save_chunks_to_json(chunks, output_path: str = "chunks_output.json"):
-    """Save chunks to JSON for inspection."""
-    data = [
-        {
-            "chunk_index": i,
-            "content": chunk.page_content,
-            "metadata": chunk.metadata
-        }
-        for i, chunk in enumerate(chunks)
-    ]
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    print(f"\n✅ Saved {len(chunks)} chunks to {output_path}")
-
-
 if __name__ == "__main__":
-    PDF_PATH = "data/sample.pdf"
-
-    if not os.path.exists(PDF_PATH):
-        print(f"❌ PDF not found at {PDF_PATH}. Add a PDF file first.")
-        exit(1)
-
-    chunks = load_and_chunk_pdf(PDF_PATH)
-    preview_chunks(chunks, n=5)
-    save_chunks_to_json(chunks)
+    chunks = load_and_chunk_pdf("data/sample.pdf")
+    print(f"\nTotal chunks: {len(chunks)}")

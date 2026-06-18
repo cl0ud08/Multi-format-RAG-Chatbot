@@ -1,31 +1,34 @@
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from ingestion.splitters import get_splitter
+from ingestion.metadata import enrich_metadata, filter_short_chunks, deduplicate_chunks
 import pandas as pd
+import os
 
 
-def load_and_chunk_csv(csv_path: str, chunk_size: int = 500, chunk_overlap: int = 50):
-    """Load a CSV file — each row becomes a document."""
-
+def load_and_chunk_csv(csv_path: str) -> list:
     print(f"Loading CSV: {csv_path}")
-
     df = pd.read_csv(csv_path)
-    print(f"  Columns: {list(df.columns)}")
-    print(f"  Rows   : {len(df)}")
+    print(f"  Rows: {len(df)} | Columns: {list(df.columns)}")
 
     docs = []
     for i, row in df.iterrows():
         content = "\n".join([f"{col}: {val}" for col, val in row.items()])
         docs.append(Document(
             page_content=content,
-            metadata={"source": csv_path, "row": i}
+            metadata={"row": i, "source": csv_path}
         ))
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap
-    )
+    splitter = get_splitter("csv")
     chunks = splitter.split_documents(docs)
-    print(f"✅ CSV loaded: {len(chunks)} chunks from {len(df)} rows")
+
+    chunks = filter_short_chunks(chunks)
+    chunks = deduplicate_chunks(chunks)
+    chunks = enrich_metadata(chunks, source_type="csv", extra={
+        "filename": os.path.basename(csv_path),
+        "columns": str(list(df.columns))
+    })
+
+    print(f"✅ CSV: {len(chunks)} final chunks")
     return chunks
 
 
@@ -33,5 +36,4 @@ if __name__ == "__main__":
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else "data/sample.csv"
     chunks = load_and_chunk_csv(path)
-    for i, c in enumerate(chunks[:3]):
-        print(f"\nChunk {i+1}: {c.page_content[:200]}...")
+    print(f"\nTotal chunks: {len(chunks)}")
