@@ -12,7 +12,6 @@ embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 
-
 def build_vector_store(pdf_path: str):
     """Chunk a PDF and embed into a FAISS index, saved to disk."""
 
