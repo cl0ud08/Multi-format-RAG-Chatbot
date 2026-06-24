@@ -231,49 +231,6 @@ curl -X POST http://localhost:8000/chat \
 
 ---
 
-## ⚠️ Known Limitations
-
-- **Free-tier rate limits** — Gemini's free tier allows ~20 requests/day and 5/minute. The API returns a clear `429` when exhausted rather than crashing, but heavy testing can hit this quickly.
-- **No per-document deletion** — FAISS's `merge_from()` combines indexes but doesn't support removing one document's chunks individually; a full reset is currently required to remove a single document.
-- **Single global session** — the backend keeps one shared conversation chain in memory, so it isn't safe for multiple concurrent users with separate conversations (would need per-session chains for that).
-- **No OCR support** — scanned PDFs (image-based, no text layer) will extract empty text; only text-layer PDFs are currently supported.
-- **CPU-only embeddings** — local embedding generation is slower than a GPU or API-based service, noticeable on larger documents.
-
----
-
-## 🆚 LangChain vs LlamaIndex
-
-This project implements the same retrieval pipeline in both frameworks using identical embeddings and LLM, to compare them fairly. See [`comparison_notes.md`](./comparison_notes.md) for full findings — including a real discrepancy found where the two frameworks' default PDF loaders parsed the same file differently.
-
-```bash
-python comparison_notes.py
-```
-
----
-
-## 🐛 Troubleshooting
-
-| Problem | Cause | Fix |
-|---|---|---|
-| `ModuleNotFoundError: langchain.chains` | LangChain 1.x moved legacy chains | Import from `langchain_classic.chains` instead |
-| `404 models/gemini-1.5-flash not found` | Model deprecated | Use `gemini-2.5-flash` |
-| `429 RESOURCE_EXHAUSTED` | Free-tier quota hit | Wait for daily/per-minute reset |
-| Docker build fails on `audioop-lts` | Package requires Python 3.13+, container uses 3.11 | Remove that line from `requirements.txt` |
-| Frontend can't reach backend in Docker | Containers can't use `localhost` to reach each other | Use the Docker service name (`backend:8000`) via the `API_URL` env var |
-| `USER_AGENT not set` warning | Cosmetic only | Add `USER_AGENT=...` to `.env` to silence it |
-
----
-
-## 📌 Key Engineering Decisions
-
-- **Local embeddings over a paid API** — eliminates per-chunk embedding cost entirely; only the final generation step touches an external API.
-- **Format-aware chunking** — PDF, DOCX, CSV, and URL content each get chunk sizes tuned to that format's natural structure, rather than one-size-fits-all splitting.
-- **FAISS index merging** — multiple uploads accumulate into one searchable index instead of each new upload overwriting the last.
-- **Quota-aware error handling** — Gemini's rate limits are caught explicitly and surfaced as clear `429` responses, not generic crashes.
-- **Framework-agnostic loader pattern** — every loader normalizes its format into the same `Document` shape, so chunking, embedding, and retrieval never need to know what format the original source was.
-
----
-
 ## 🗺️ What's Next
 
 - [ ] Per-session chains for multi-user support
