@@ -6,11 +6,9 @@ Built end-to-end over 14 days as a learning project to understand how production
 
 ---
 
-## 🔗 Links
-
-- **Live demo:** `https://huggingface.co/spaces/YOUR_USERNAME/rag-chatbot`
-- **Repo:** `https://github.com/YOUR_USERNAME/rag-chatbot`
-
+<p align="center">
+  <img src="images/demo.png" width="900">
+</p>
 ---
 
 ## ✨ Features
